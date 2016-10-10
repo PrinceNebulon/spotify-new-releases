@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Spotify New Releases</title>
+	<script src="https://code.jquery.com/jquery-3.1.0.min.js" integrity="sha256-cCueBR6CsyA4/9szpPfrX3s49M9vUU5BgtiJj06wt/s=" crossorigin="anonymous"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/q.js/1.4.1/q.min.js"></script>
+
+	<script type="text/javascript">
+		var me = {};
+		var token = getFragmentByName('access_token');
+		var artists = [];
+		var loadedArtists = 0;
+		var counter = 0;
+
+		Date.prototype.getWeekNumber = function(){
+		    var d = new Date(+this);
+		    d.setHours(0,0,0);
+		    d.setDate(d.getDate()+4-(d.getDay()||7));
+		    return Math.ceil((((d-new Date(d.getFullYear(),0,1))/8.64e7)+1)/7);
+		};
+
+		$(document).ready(function() {
+
+			console.log(token);
+			if (!token) {
+				window.location.href = 'https://accounts.spotify.com/authorize?' + EncodeQueryData({
+					client_id: '21e9cabe3e744a658082c96e002c358a',
+					response_type: 'token',
+					redirect_uri: 'http://localhost:8080/',
+					scope: 'user-follow-read user-read-private' //https://developer.spotify.com/web-api/using-scopes/
+				});
+			}
+
+			get('https://api.spotify.com/v1/me')
+				.then(function(data) {
+					me = data;
+					return populateArtists('https://api.spotify.com/v1/me/following?type=artist&limit=10');
+				})
+				.then(function(data) {
+					console.log('sorting data');
+					artists.sort();
+					updateLoadProgress();
+					$.each(artists, function(index, artist) {
+						get('https://api.spotify.com/v1/artists/' + artist[1].id + '/albums?limit=50&market=' + me.country)
+							.then(function(albums) {
+								$('body')
+									.append('<div id="artist-'+artist[1].id+'">' + artist[1].name + '<br /><ul id="artist-'+artist[1].id+'-albums"></ul></div>');
+								setTimeout(function(){
+									loadedArtists++;
+									updateLoadProgress();
+									$.each(albums.items, function(albumIndex, album) {
+										get('https://api.spotify.com/v1/albums/' + album.id)
+											.then(function(albumData) {
+												processAlbum(albumData, artist[1]);
+											});
+									});
+								}, 2000 * index);
+								console.log('sleeping ' + ((2000 * index)/1000) + 'seconds for ' + artist[1].name);
+							})
+						console.log(artist);
+					});
+				});
+		});
+
+		function processAlbum(album, followedArtist) {
+
+			// Add to main list
+			$('#artist-'+followedArtist.id+'-albums').append(generateAlbumLink(album, true, false, true));
+
+			var now = new Date();
+			var date = new Date(album.release_date);
+
+			if (now.getFullYear() == date.getFullYear()) {
+				var albumHtml = generateAlbumLink(album, true, true, true);
+				$('#newReleases-thisyear').append(albumHtml);
+
+				if (now.getMonth() == date.getMonth()) {
+					$('#newReleases-thismonth').append(albumHtml);
+				}
+
+				if (now.getWeekNumber() == date.getWeekNumber()) {
+					$('#newReleases-thisweek').append(albumHtml);
+				}
+
+				if ((now.getWeekNumber() - 1) == date.getWeekNumber()) {
+					$('#newReleases-lastweek').append(albumHtml);
+				}
+			}
+
+		}
+
+		function generateAlbumLink(album, includeImage = true, includeArtist = true, isListItem = true, followedArtist) {
+			var html = '';
+			if (isListItem == true) html += '<li>';
+			html += '<a href="' + album.uri + '">';
+			if (includeImage == true) {
+				var image = getAlbumImage(album, 64);
+				html += '<img src="' + image.url + '" width="' + image.width + '" height="' + image.height + '" /><br />';
+			}
+			if (includeArtist == true) {
+				$.each(album.artists, function(index, artist) {
+					html += artist.name + ', ';
+				});
+				html = html.trim().replace(/(^,)|(,$)/g, '');
+				html += ' - ';
+			}
+			html += album.name + ' (' + album.release_date + ')' + '</a>';
+			if (isListItem == true) html += '</li>';
+			return html;
+		}
+
+		function populateArtists(artistsUrl, deferred) {
+			if (!deferred) 
+				deferred = Q.defer();
+
+			console.log('GETTING ARTISTS');
+			counter++;
+			if (counter > 1000) {
+				console.error('too many requests!');
+				return deferred.reject('too many requests!');
+			}
+			get(artistsUrl)
+				.then(function(data) {
+					$.each(data.artists.items, function(index, value) {
+						console.log(value.name);
+						artists.push([value.name, value]);
+					});
+					if (data.artists.next) {
+						//TODO: enable recursion here
+						//deferred.resolve();
+						populateArtists(data.artists.next, deferred);
+					}
+					else
+					{
+						deferred.resolve();
+					}
+				});
+
+			return deferred.promise;
+		}
+
+		function getAlbumImage(album, size) {
+			if (!album.images) return '';
+			var defaultImage;
+			var foundImage;
+			$.each(album.images, function(index, image) {
+				if (!defaultImage) defaultImage = image;
+				if (image.height == size || image.width == size) foundImage = image;
+			});
+			return foundImage ? foundImage : defaultImage;
+		}
+
+		function get(url, queryData = {}) {
+			var deferred = Q.defer();
+			$.ajax(url, {
+				method: 'GET',
+				headers: {
+					Authorization: 'Bearer ' + token
+				},
+				withCredentials: true,
+				data: queryData,
+				success: function(data, textStatus, jqXHR) {
+					console.debug(data);
+					console.debug(textStatus);
+					console.debug(jqXHR);
+					deferred.resolve(data);
+				},
+				error: function(jqXHR, textStatus, errorThrown) {
+					console.debug(jqXHR);
+					console.debug(textStatus);
+					console.error(errorThrown);
+					deferred.reject(errorThrown);
+				}
+			})
+			return deferred.promise;
+		}
+
+		function post(url, formData = {}, withAuth = true) {
+			var headers = {};
+			if (withAuth) {
+				headers['Authorization'] = 'Bearer ' + token;
+			}
+			var deferred = Q.defer();
+			$.ajax(url, {
+				method: 'POST',
+				headers: headers,
+				withCredentials: true,
+				data: queryData,
+				success: function(data, textStatus, jqXHR) {
+					console.debug(data);
+					console.debug(textStatus);
+					console.debug(jqXHR);
+					deferred.resolve(data);
+				},
+				error: function(jqXHR, textStatus, errorThrown) {
+					console.debug(jqXHR);
+					console.debug(textStatus);
+					console.error(errorThrown);
+					deferred.reject(errorThrown);
+				}
+			})
+			return deferred.promise;
+		}
+
+		function getParameterByName(name, url) {
+		    if (!url) url = window.location.href;
+		    console.debug(url);
+		    name = name.replace(/[\[\]]/g, "\\$&");
+		    var regex = new RegExp("[?&]" + name + "(=([^&#]*)|&|#|$)"),
+		        results = regex.exec(url);
+		    if (!results) return null;
+		    if (!results[2]) return '';
+		    return decodeURIComponent(results[2].replace(/\+/g, " "));
+		}
+
+		function getFragmentByName(name, url) {
+		    if (!url) url = window.location.hash;
+		    console.debug(url);
+		    name = name.replace(/[\[\]]/g, "\\$&");
+		    var regex = new RegExp("[#&]" + name + "(=([^&#]*)|&|#|$)"),
+		        results = regex.exec(url);
+		    if (!results) return null;
+		    if (!results[2]) return '';
+		    return decodeURIComponent(results[2].replace(/\+/g, " "));
+		}
+
+		function EncodeQueryData(data) {
+		   var ret = [];
+		   for (var d in data)
+		      ret.push(encodeURIComponent(d) + "=" + encodeURIComponent(data[d]));
+		   return ret.join("&");
+		}
+
+		function updateLoadProgress() {
+			var percent = ((loadedArtists/artists.length) * 100).toString();
+			var percentRegex = /([0-9]+)[\.]?/;
+			var match = percentRegex.exec(percent);
+
+			$('#loadprogress').html(loadedArtists + '/' + artists.length + ' (' + match[1] + '%)');
+		}
+	</script>
+</head>
+<body>
+Progress: <span id="loadprogress"></span><br />
+
+<b>New this week</b>
+<ul id="newReleases-thisweek"></ul>
+
+<b>New last week</b>
+<ul id="newReleases-lastweek"></ul>
+
+<b>New this month</b>
+<ul id="newReleases-thismonth"></ul>
+
+<b>New this year</b>
+<ul id="newReleases-thisyear"></ul>
+
+</body>
+</html>
