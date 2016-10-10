@@ -26,7 +26,7 @@
 				window.location.href = 'https://accounts.spotify.com/authorize?' + EncodeQueryData({
 					client_id: '21e9cabe3e744a658082c96e002c358a',
 					response_type: 'token',
-					redirect_uri: 'http://localhost:8080/',
+					redirect_uri: window.location.href,
 					scope: 'user-follow-read user-read-private' //https://developer.spotify.com/web-api/using-scopes/
 				});
 			}
